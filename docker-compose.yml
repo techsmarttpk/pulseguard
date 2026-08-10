@@ -1,0 +1,223 @@
+name: pulseguard
+
+x-python-env: &python-env
+  env_file:
+    - .env
+
+services:
+  # ---------------------------------------------------------------- Kafka
+  #
+  # Official Apache Kafka image (apache/kafka), KRaft mode, single
+  # combined broker+controller node — replaces bitnami/kafka:3.7, which
+  # Bitnami pulled from Docker Hub's free tier. This is the image Apache
+  # Kafka itself publishes; env vars map 1:1 to server.properties keys
+  # (dots -> underscores), which is a different convention than Bitnami's
+  # KAFKA_CFG_* wrapper, so every Kafka env var below changed shape.
+  #
+  # Three listeners:
+  #   PLAINTEXT      - other containers on the Docker network (kafka:9092)
+  #   PLAINTEXT_HOST - host machine, e.g. a local script or Kafka UI tool
+  #                    (localhost:29092)
+  #   CONTROLLER      - internal KRaft quorum traffic only, never advertised
+  #
+  # Storage is intentionally ephemeral (no named volume): the image runs
+  # as a non-root user and the documented default log dir
+  # (/tmp/kraft-combined-logs) isn't guaranteed writable once a fresh
+  # named volume is bind-mounted over it, so persisting it reliably needs
+  # more plumbing than a local dev/demo stack warrants. Kafka topic data
+  # does not need to survive `docker compose down` here — the durable
+  # state PulseGuard cares about (alerts, anomalies, feed transitions) is
+  # in Postgres, not Kafka.
+  kafka:
+    image: apache/kafka:3.9.2
+    container_name: pulseguard-kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      CLUSTER_ID: "4L6g3nShT-eMCtK--X86sw"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    restart: unless-stopped
+
+  kafka-init:
+    image: apache/kafka:3.9.2
+    container_name: pulseguard-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    volumes:
+      - ./infrastructure/kafka/init-topics.sh:/scripts/init-topics.sh:ro
+    entrypoint: ["/bin/bash", "/scripts/init-topics.sh"]
+    restart: "no"
+
+  # ------------------------------------------------------------ Postgres
+  postgres:
+    image: postgres:16-alpine
+    container_name: pulseguard-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pulseguard}
+      POSTGRES_USER: ${POSTGRES_USER:-pulseguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pulseguard_dev_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pulseguard}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # --------------------------------------------------------- Prometheus
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: pulseguard-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    restart: unless-stopped
+
+  # ------------------------------------------------------------- Grafana
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: pulseguard-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # ----------------------------------------------------------- Simulator
+  simulator:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    container_name: pulseguard-simulator
+    <<: *python-env
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ----------------------------------------------------------- Ingestion
+  ingestion:
+    build:
+      context: .
+      dockerfile: services/ingestion/Dockerfile
+    container_name: pulseguard-ingestion
+    <<: *python-env
+    ports:
+      - "9101:9101"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ------------------------------------------------------ Anomaly detection
+  anomaly-detection:
+    build:
+      context: .
+      dockerfile: services/anomaly_detection/Dockerfile
+    container_name: pulseguard-anomaly-detection
+    <<: *python-env
+    ports:
+      - "9102:9102"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ----------------------------------------------------------- Monitoring
+  monitoring:
+    build:
+      context: .
+      dockerfile: services/monitoring/Dockerfile
+    container_name: pulseguard-monitoring
+    <<: *python-env
+    ports:
+      - "9103:9103"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ API
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: pulseguard-api
+    <<: *python-env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+    restart: unless-stopped
+
+  # ------------------------------------------------------------ Dashboard
+  #
+  # Build context is scoped to ./dashboard (not the repo root like the
+  # Python services) so dashboard/.dockerignore actually governs what gets
+  # sent to the daemon — this is what keeps a stray local node_modules/
+  # or dist/ from ever reaching the build context.
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    container_name: pulseguard-dashboard
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:

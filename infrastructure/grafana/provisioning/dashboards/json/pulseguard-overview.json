@@ -1,0 +1,113 @@
+{
+  "title": "PulseGuard — Market Data Reliability Overview",
+  "uid": "pulseguard-overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    { "id": 1, "type": "row", "title": "Feed Overview", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
+    {
+      "id": 2, "type": "stat", "title": "Feed Health (3=HEALTHY 2=DEGRADED 1=STALE 0=OFFLINE)",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 1 },
+      "targets": [{ "expr": "pulseguard_feed_health", "legendFormat": "{{feed}}", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "OFFLINE", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "STALE", "color": "orange" } } },
+            { "type": "value", "options": { "2": { "text": "DEGRADED", "color": "yellow" } } },
+            { "type": "value", "options": { "3": { "text": "HEALTHY", "color": "green" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "yellow", "value": 2 },
+              { "color": "green", "value": 3 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value_and_name" }
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Messages / sec per feed",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 1 },
+      "targets": [{ "expr": "pulseguard_feed_messages_per_second", "legendFormat": "{{feed}}", "refId": "A" }]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Error rate (rejected / received)",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 7 },
+      "targets": [{
+        "expr": "sum(rate(pulseguard_messages_rejected_total[1m])) / sum(rate(pulseguard_messages_received_total[1m]))",
+        "legendFormat": "error rate", "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percentunit" } }
+    },
+    {
+      "id": 5, "type": "stat", "title": "Active Alerts by Severity",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 7 },
+      "targets": [{ "expr": "pulseguard_active_alerts", "legendFormat": "{{severity}}", "refId": "A" }],
+      "options": { "colorMode": "value", "graphMode": "none" }
+    },
+
+    { "id": 10, "type": "row", "title": "Latency", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 } },
+    {
+      "id": 11, "type": "timeseries", "title": "Market data latency — P50 / P95 / P99",
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 14 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(pulseguard_market_data_latency_seconds_bucket[1m])) by (le))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum(rate(pulseguard_market_data_latency_seconds_bucket[1m])) by (le))", "legendFormat": "p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum(rate(pulseguard_market_data_latency_seconds_bucket[1m])) by (le))", "legendFormat": "p99", "refId": "C" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 12, "type": "stat", "title": "Max observed latency (approx, P99.9)",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 14 },
+      "targets": [{ "expr": "histogram_quantile(0.999, sum(rate(pulseguard_market_data_latency_seconds_bucket[5m])) by (le))", "legendFormat": "max", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+
+    { "id": 20, "type": "row", "title": "Anomalies", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 } },
+    {
+      "id": 21, "type": "timeseries", "title": "Anomalies over time (by method)",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 23 },
+      "targets": [{ "expr": "sum(rate(pulseguard_anomalies_total[1m])) by (method)", "legendFormat": "{{method}}", "refId": "A" }]
+    },
+    {
+      "id": 22, "type": "piechart", "title": "Anomaly types (5m, by severity)",
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 23 },
+      "targets": [{ "expr": "sum(increase(pulseguard_anomalies_total[5m])) by (severity)", "legendFormat": "{{severity}}", "refId": "A" }]
+    },
+    {
+      "id": 23, "type": "bargauge", "title": "Symbols affected (5m)",
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 23 },
+      "targets": [{ "expr": "sum(increase(pulseguard_anomalies_total[5m])) by (feed)", "legendFormat": "{{feed}}", "refId": "A" }]
+    },
+
+    { "id": 30, "type": "row", "title": "Throughput", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 } },
+    {
+      "id": 31, "type": "timeseries", "title": "Incoming vs. Processing vs. Rejected rate",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 31 },
+      "targets": [
+        { "expr": "sum(rate(pulseguard_messages_received_total[1m]))", "legendFormat": "received", "refId": "A" },
+        { "expr": "sum(rate(pulseguard_messages_processed_total[1m]))", "legendFormat": "processed", "refId": "B" },
+        { "expr": "sum(rate(pulseguard_messages_rejected_total[1m]))", "legendFormat": "rejected", "refId": "C" }
+      ]
+    },
+    {
+      "id": 32, "type": "timeseries", "title": "Rejected rate by reason",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 31 },
+      "targets": [{ "expr": "sum(rate(pulseguard_messages_rejected_total[1m])) by (reason)", "legendFormat": "{{reason}}", "refId": "A" }]
+    },
+    {
+      "id": 33, "type": "timeseries", "title": "Kafka consumer lag",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 38 },
+      "targets": [{ "expr": "pulseguard_kafka_consumer_lag", "legendFormat": "{{group}} / {{topic}}", "refId": "A" }]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+aiokafka==0.10.0
+orjson==3.10.7
+pydantic==2.9.2
+pydantic-settings==2.5.2
+structlog==24.4.0
+numpy==1.26.4
+asyncpg==0.29.0
+prometheus-client==0.20.0

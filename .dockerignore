@@ -1,0 +1,45 @@
+# Applies to every service whose docker-compose build context is the repo
+# root (simulator, ingestion, anomaly-detection, monitoring, api). Without
+# this file, Docker sends the ENTIRE repo — including dashboard/node_modules
+# if it happens to exist locally — as build context to every one of those
+# builds, which is both slow and (as with the dashboard build specifically)
+# can fail outright on files Docker's build context handling rejects.
+
+# Node / frontend build artifacts (dashboard/ has its own scoped
+# .dockerignore too, but this covers it for every other service's context
+# as well, and for any node_modules that shows up elsewhere in the repo).
+node_modules
+dist
+build
+.vite
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+vite.config.*.timestamp-*
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+*.egg-info
+.venv
+venv
+
+# VCS / editor / OS noise
+.git
+.gitignore
+.DS_Store
+*.local
+.vscode
+.idea
+
+# Secrets / local env
+.env
+
+# Docs and tests aren't needed inside any service image
+README.md
+tests
